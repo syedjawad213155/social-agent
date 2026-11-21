@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=__FONT_H__:wght@700;800&family=__FONT_B__:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --p:__PRIMARY__; --s:__SECONDARY__; --t:__TEXT__; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1080px; height: 1350px; position: relative; overflow: hidden;
+         font-family: '__FONT_B_CSS__', sans-serif; color: var(--t);
+         background: __BODYBG__; }
+  .bg { position: absolute; inset: 0; background-size: cover; background-position: center; __BG__ }
+  .shade { position: absolute; inset: 0; __SHADE__ }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; background: var(--s); }
+  .blob { position: absolute; border-radius: 50%; background: var(--s); opacity: .35; filter: blur(2px); }
+  .b1 { width: 620px; height: 620px; right: -180px; top: -160px; }
+  .b2 { width: 380px; height: 380px; left: -120px; bottom: 220px; opacity: .22; }
+  .wrap { position: absolute; inset: 0; padding: 84px; display: flex; flex-direction: column; }
+  .top { display: flex; align-items: center; gap: 18px; }
+  .logo { height: 64px; border-radius: 12px; }
+  .brand { font-family: '__FONT_H_CSS__', sans-serif; font-weight: 800; font-size: 34px; letter-spacing: 2px; text-transform: uppercase; }
+  .rule { width: 96px; height: 8px; background: var(--s); border-radius: 4px; margin: 0 0 36px; }
+  .main { flex: 1; display: flex; flex-direction: column; }
+  h1 { font-family: '__FONT_H_CSS__', sans-serif; font-weight: 800; line-height: 1.05;
+       font-size: __HSIZE__px; text-wrap: balance; }
+  p.sub { margin-top: 32px; font-size: 40px; line-height: 1.35; font-weight: 600; opacity: .92; max-width: 860px; }
+  .foot { display: flex; justify-content: space-between; align-items: center; }
+  .handle { font-size: 32px; font-weight: 600; opacity: .9; }
+  .cta { background: var(--s); color: var(--p); font-family: '__FONT_H_CSS__', sans-serif; font-weight: 800;
+         font-size: 30px; padding: 20px 38px; border-radius: 60px; }
+  /* Teen layouts: roz badalte hain */
+  .L1 .main { justify-content: flex-end; padding-bottom: 60px; }
+  .L2 .main { justify-content: center; align-items: center; text-align: center; }
+  .L2 .rule { margin-left: auto; margin-right: auto; }
+  .L3 .main { justify-content: flex-start; padding-top: 140px; }
+</style>
+</head>
+<body class="__LAYOUT__">
+  <div class="bg"></div><div class="shade"></div>
+  __BAR__<div class="blob b1"></div><div class="blob b2"></div>
+  <div class="wrap">
+    <div class="top">__LOGO__<div class="brand">__BRAND__</div></div>
+    <div class="main"><div class="rule"></div><h1>__HEADLINE__</h1><p class="sub">__SUBTEXT__</p></div>
+    <div class="foot"><div class="handle">__HANDLE__</div><div class="cta">__CTA__</div></div>
+  </div>
+</body>
+</html>
