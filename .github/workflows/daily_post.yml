@@ -1,0 +1,44 @@
+name: Daily Post
+
+on:
+  schedule:
+    - cron: "0 4 * * *"      # 04:00 UTC = 09:00 Pakistan time
+  workflow_dispatch:          # haath se chalane ke liye
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SHEET_ID: ${{ secrets.SHEET_ID }}
+      PAGE_ACCESS_TOKEN: ${{ secrets.PAGE_ACCESS_TOKEN }}
+      PAGE_ID: ${{ secrets.PAGE_ID }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: 1) Caption + design
+        run: python -m src.generate
+      - name: 2) Image repo mein save karo
+        run: |
+          git config user.name "social-agent"
+          git config user.email "social-agent@users.noreply.github.com"
+          git add -A images
+          git diff --cached --quiet || (git commit -m "daily image" && git push)
+      - name: 3) Publish
+        run: python -m src.publish
