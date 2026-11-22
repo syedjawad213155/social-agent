@@ -9,6 +9,7 @@ from google.genai import types
 from .config import GEMINI_MODEL
 
 _client = None
+_discovered_models = None
 
 FALLBACK_MODELS = [
     GEMINI_MODEL,
@@ -17,13 +18,39 @@ FALLBACK_MODELS = [
 ]
 
 
+def list_available_models():
+    models = []
+    for m in client().models.list():
+        name = getattr(m, "name", "")
+        actions = getattr(m, "supported_actions", None) or []
+        if not actions or "generateContent" in actions:
+            clean = name.replace("models/", "").strip()
+            if clean and "embedding" not in clean and "imagen" not in clean and "veo" not in clean:
+                models.append(clean)
+    return models
+
+
 def _candidate_models():
+    global _discovered_models
     out, seen = [], set()
     for m in FALLBACK_MODELS:
         name = (m or "").strip()
         if name and name not in seen:
             seen.add(name)
             out.append(name)
+
+    if _discovered_models is None:
+        try:
+            _discovered_models = list_available_models()
+            print("Available Gemini models:", _discovered_models, flush=True)
+        except Exception as e:
+            print("Model list fetch failed:", type(e).__name__, flush=True)
+            _discovered_models = []
+
+    for m in _discovered_models:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
     return out
 
 
@@ -177,3 +204,7 @@ Rules:
 - Never invent prices, dates, discounts or promises. If unsure, say the team will follow up and share contact: {brand.get('contact')}.
 JSON: {{"category": "...", "needs_human": true/false, "reply": "..."}}"""
     return ask_json(prompt, system, temperature=0.4)
+
+
+if __name__ == "__main__":
+    print("Available Gemini models:", list_available_models(), flush=True)
