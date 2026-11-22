@@ -14,7 +14,6 @@ FALLBACK_MODELS = [
     GEMINI_MODEL,
     "gemini-2.5-flash-lite",
     "gemini-2.0-flash",
-    "gemini-3.8-flash",
 ]
 
 
@@ -31,34 +30,29 @@ def _candidate_models():
 def client():
     global _client
     if _client is None:
-        _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        _client = genai.Client(
+            api_key=os.environ["GEMINI_API_KEY"],
+            http_options=types.HttpOptions(timeout=15000),  # 15s hard timeout
+        )
     return _client
 
 
 def _generate_with_fallback(contents, config):
     last_err = None
     models = _candidate_models()
-    for m_idx, model_name in enumerate(models):
-        # Har model par max 2 quick tries
-        for attempt in range(2):
-            try:
-                return client().models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config,
-                )
-            except Exception as e:
-                last_err = e
-                msg = str(e).lower()
-                # Agar model exist hi nahi karta ya is account/region/tier ke liye available nahi hai,
-                # to is model par dobara try karne ke bajaye foran agle model par jayein
-                if any(k in msg for k in ("not found", "404", "not available", "permission", "unsupported")):
-                    break
-                if attempt == 0:
-                    time.sleep(2)
-        # Agar agla model maujood hai to thoda sa pause de kar switch karein
-        if m_idx < len(models) - 1:
-            time.sleep(1)
+    for idx, model_name in enumerate(models):
+        try:
+            print(f"Trying model: {model_name}", flush=True)
+            return client().models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            last_err = e
+            print(f"Model {model_name} failed: {type(e).__name__}", flush=True)
+            if idx < len(models) - 1:
+                time.sleep(1)
     raise last_err
 
 
