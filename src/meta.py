@@ -14,7 +14,7 @@ class MetaError(Exception):
 def _call(method, path, **params):
     params["access_token"] = os.environ["PAGE_ACCESS_TOKEN"]
     kw = {"params": params} if method == "GET" else {"data": params}
-    r = requests.request(method, f"{GRAPH}/{path}", timeout=60, **kw)
+    r = requests.request(method, f"{GRAPH}/{path}", timeout=20, **kw)
     try:
         j = r.json()
     except ValueError:
