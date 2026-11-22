@@ -10,6 +10,23 @@ from .config import GEMINI_MODEL
 
 _client = None
 
+FALLBACK_MODELS = [
+    GEMINI_MODEL,
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-3.8-flash",
+]
+
+
+def _candidate_models():
+    out, seen = [], set()
+    for m in FALLBACK_MODELS:
+        name = (m or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
 
 def client():
     global _client
@@ -18,30 +35,41 @@ def client():
     return _client
 
 
-def _retry(fn, tries=4):
-    for i in range(tries):
-        try:
-            return fn()
-        except Exception:
-            if i == tries - 1:
-                raise
-            time.sleep(15 * (i + 1))      # free tier ki rate limit ke liye
+def _generate_with_fallback(contents, config):
+    last_err = None
+    models = _candidate_models()
+    for m_idx, model_name in enumerate(models):
+        # Har model par max 2 quick tries
+        for attempt in range(2):
+            try:
+                return client().models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                # Agar model exist hi nahi karta ya is account/region/tier ke liye available nahi hai,
+                # to is model par dobara try karne ke bajaye foran agle model par jayein
+                if any(k in msg for k in ("not found", "404", "not available", "permission", "unsupported")):
+                    break
+                if attempt == 0:
+                    time.sleep(2)
+        # Agar agla model maujood hai to thoda sa pause de kar switch karein
+        if m_idx < len(models) - 1:
+            time.sleep(1)
+    raise last_err
 
 
 def ask_json(prompt, system=None, temperature=0.8):
-    def call():
-        r = client().models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=temperature,
-                response_mime_type="application/json",
-            ),
-        )
-        return r.text
-
-    text = _retry(call).strip()
+    cfg = types.GenerateContentConfig(
+        system_instruction=system,
+        temperature=temperature,
+        response_mime_type="application/json",
+    )
+    r = _generate_with_fallback(prompt, cfg)
+    text = (r.text or "").strip()
     text = re.sub(r"^```(?:json)?|```$", "", text).strip()
     return json.loads(text)
 
@@ -58,16 +86,15 @@ def research(brand, post):
         "(3) one trending angle or hook idea. Keep it short, plain text."
     )
     try:
-        r = client().models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
+        r = _generate_with_fallback(
+            prompt,
+            types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())]
             ),
         )
         return r.text or ""
     except Exception as e:
-        print("Research skip:", type(e).__name__)
+        print("Research skip:", type(e).__name__, flush=True)
         return ""
 
 
