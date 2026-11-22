@@ -135,7 +135,7 @@ def main():
                 category = res.get("category", "other")
                 needs_human = bool(res.get("needs_human"))
                 reply = (res.get("reply") or "").strip()
-                time.sleep(5)
+                time.sleep(1)
 
             if category == "spam":
                 action = "Ignored"
