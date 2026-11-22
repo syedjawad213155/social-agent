@@ -1,6 +1,5 @@
-"""Comments + DMs: naye items dhoondo, jawab do, mushkil wale 'Needs Human' mark karo.
+"""Sirf Facebook Comments + DMs: naye items dhoondo, jawab do, mushkil wale 'Needs Human' mark karo.
 Privacy: customers ke messages public Actions logs mein print nahi hote."""
-import os
 import time
 from datetime import datetime, timezone
 
@@ -15,9 +14,9 @@ def age_hours(ts):
         return 9999
 
 
-def collect(own_ig_username):
+def collect():
     items, errors = [], []
-    pid, iid = meta.page_id(), meta.ig_id()
+    pid = meta.page_id()
 
     def safe(label, fn):
         try:
@@ -25,61 +24,61 @@ def collect(own_ig_username):
         except Exception as e:
             errors.append(f"{label}: {str(e)[:120]}")
 
-    def ig_comments():
-        for m in meta.ig_recent_media():
-            for c in meta.ig_comments(m["id"]):
-                if c.get("username") == own_ig_username:
-                    continue
-                replied = any(x.get("username") == own_ig_username
-                              for x in c.get("replies", {}).get("data", []))
-                if replied or age_hours(c.get("timestamp", "")) > config.COMMENT_MAX_AGE_H:
-                    continue
-                items.append(dict(platform="Instagram", kind="comment", id=c["id"],
-                                  text=c.get("text", ""), author=c.get("username", ""),
-                                  ts=c.get("timestamp", "")))
-
     def fb_comments():
         for p in meta.fb_recent_posts():
             for c in meta.fb_comments(p["id"]):
                 frm = c.get("from", {})
                 if frm.get("id") == pid:
                     continue
-                replied = any(x.get("from", {}).get("id") == pid
-                              for x in c.get("comments", {}).get("data", []))
+                replied = any(
+                    x.get("from", {}).get("id") == pid
+                    for x in c.get("comments", {}).get("data", [])
+                )
                 if replied or age_hours(c.get("created_time", "")) > config.COMMENT_MAX_AGE_H:
                     continue
-                items.append(dict(platform="Facebook", kind="comment", id=c["id"],
-                                  text=c.get("message", ""), author=frm.get("name", ""),
-                                  ts=c.get("created_time", "")))
+                items.append(
+                    dict(
+                        platform="Facebook",
+                        kind="comment",
+                        id=c["id"],
+                        text=c.get("message", ""),
+                        author=frm.get("name", ""),
+                        ts=c.get("created_time", ""),
+                    )
+                )
 
-    def dms(platform, label):
-        for conv in meta.conversations(platform):
+    def fb_dms():
+        for conv in meta.conversations("messenger"):
             msgs = conv.get("messages", {}).get("data", [])
             if not msgs:
                 continue
             m = msgs[0]
             frm = m.get("from", {})
-            if frm.get("id") in (pid, iid):
-                continue                      # aakhri message hamara hai -> jawab ho chuka
+            if frm.get("id") == pid:
+                continue  # aakhri message hamara hai -> jawab ho chuka
             if age_hours(m.get("created_time", "")) > config.DM_MAX_AGE_H:
                 continue
-            items.append(dict(platform=label, kind="dm", id=m["id"], text=m.get("message", ""),
-                              author=frm.get("username") or frm.get("name", ""),
-                              sender_id=frm.get("id"), ts=m.get("created_time", ""),
-                              dm_platform=platform))
+            items.append(
+                dict(
+                    platform="Facebook",
+                    kind="dm",
+                    id=m["id"],
+                    text=m.get("message", ""),
+                    author=frm.get("name", ""),
+                    sender_id=frm.get("id"),
+                    ts=m.get("created_time", ""),
+                    dm_platform="messenger",
+                )
+            )
 
-    safe("IG comments", ig_comments)
     safe("FB comments", fb_comments)
-    safe("IG DMs", lambda: dms("instagram", "Instagram"))
-    safe("FB DMs", lambda: dms("messenger", "Facebook"))
+    safe("FB DMs", fb_dms)
     return items, errors
 
 
 def send(it, text):
     if it["kind"] == "dm":
         meta.send_dm(it["dm_platform"], it["sender_id"], text)
-    elif it["platform"] == "Instagram":
-        meta.ig_reply_comment(it["id"], text)
     else:
         meta.fb_reply_comment(it["id"], text)
 
@@ -89,15 +88,19 @@ def main():
     brand, faq = sheets.get_brand(bk), sheets.get_faq(bk)
     log = sheets.log_ws(bk)
     seen = set(log.col_values(4))
-    keywords = [k.strip().lower() for k in brand.get("escalation_keywords", "").split(",") if k.strip()]
-    safe_dm = brand.get("safe_reply_dm", "Thanks for reaching out. Our team will contact you shortly.")
-    safe_cm = brand.get("safe_reply_comment", "Thanks! Please DM us and our team will help you.")
+    keywords = [
+        k.strip().lower()
+        for k in brand.get("escalation_keywords", "").split(",")
+        if k.strip()
+    ]
+    safe_dm = brand.get(
+        "safe_reply_dm", "Thanks for reaching out. Our team will contact you shortly."
+    )
+    safe_cm = brand.get(
+        "safe_reply_comment", "Thanks! Please DM us and our team will help you."
+    )
 
-    try:
-        own = meta.ig_username()
-    except Exception:
-        own = ""
-    items, errors = collect(own)
+    items, errors = collect()
     items = [i for i in items if i["id"] not in seen and i["text"].strip()]
     items.sort(key=lambda i: i["ts"])
     print(f"Naye items: {len(items)} | collect errors: {errors}")
@@ -117,7 +120,7 @@ def main():
                 category = res.get("category", "other")
                 needs_human = bool(res.get("needs_human"))
                 reply = (res.get("reply") or "").strip()
-                time.sleep(5)                 # Gemini free rate limit
+                time.sleep(5)  # Gemini free rate limit
 
             if category == "spam":
                 action = "Ignored"
@@ -138,8 +141,19 @@ def main():
         except Exception as e:
             action, reply = f"Error: {type(e).__name__}", str(e)[:150]
             print("Item fail:", type(e).__name__)
-        rows.append([config.now().strftime("%Y-%m-%d %H:%M"), it["platform"], it["kind"],
-                     it["id"], it["author"], text[:500], category, action, reply])
+        rows.append(
+            [
+                config.now().strftime("%Y-%m-%d %H:%M"),
+                it["platform"],
+                it["kind"],
+                it["id"],
+                it["author"],
+                text[:500],
+                category,
+                action,
+                reply,
+            ]
+        )
 
     if rows:
         log.append_rows(rows)
