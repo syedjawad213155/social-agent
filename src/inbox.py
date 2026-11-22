@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from . import ai, config, meta, sheets
 
 
+def log_step(msg):
+    print(msg, flush=True)
+
+
 def age_hours(ts):
     try:
         t = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S%z")
@@ -25,7 +29,10 @@ def collect():
             errors.append(f"{label}: {str(e)[:120]}")
 
     def fb_comments():
-        for p in meta.fb_recent_posts():
+        log_step("Fetching FB posts...")
+        posts = meta.fb_recent_posts()
+        log_step(f"FB posts count: {len(posts)}")
+        for p in posts:
             for c in meta.fb_comments(p["id"]):
                 frm = c.get("from", {})
                 if frm.get("id") == pid:
@@ -48,14 +55,17 @@ def collect():
                 )
 
     def fb_dms():
-        for conv in meta.conversations("messenger"):
+        log_step("Fetching FB DMs...")
+        convs = meta.conversations("messenger")
+        log_step(f"FB conversations count: {len(convs)}")
+        for conv in convs:
             msgs = conv.get("messages", {}).get("data", [])
             if not msgs:
                 continue
             m = msgs[0]
             frm = m.get("from", {})
             if frm.get("id") == pid:
-                continue  # aakhri message hamara hai -> jawab ho chuka
+                continue
             if age_hours(m.get("created_time", "")) > config.DM_MAX_AGE_H:
                 continue
             items.append(
@@ -84,10 +94,14 @@ def send(it, text):
 
 
 def main():
+    log_step("Opening Google Sheet...")
     bk = sheets.book()
+    log_step("Reading brand, FAQ, and log...")
     brand, faq = sheets.get_brand(bk), sheets.get_faq(bk)
-    log = sheets.log_ws(bk)
-    seen = set(log.col_values(4))
+    log_ws = sheets.log_ws(bk)
+    seen = set(log_ws.col_values(4))
+    log_step(f"Seen IDs count: {len(seen)}")
+
     keywords = [
         k.strip().lower()
         for k in brand.get("escalation_keywords", "").split(",")
@@ -103,13 +117,14 @@ def main():
     items, errors = collect()
     items = [i for i in items if i["id"] not in seen and i["text"].strip()]
     items.sort(key=lambda i: i["ts"])
-    print(f"Naye items: {len(items)} | collect errors: {errors}")
+    log_step(f"Naye items: {len(items)} | collect errors: {errors}")
 
     budget, rows = config.MAX_REPLIES, []
-    for it in items:
+    for idx, it in enumerate(items, start=1):
         if budget <= 0:
-            print("Reply limit poori, baaqi agli run mein")
+            log_step("Reply limit poori, baaqi agli run mein")
             break
+        log_step(f"Processing item {idx}/{len(items)} ({it['kind']})...")
         text = it["text"]
         category, action, reply = "", "", ""
         try:
@@ -120,7 +135,7 @@ def main():
                 category = res.get("category", "other")
                 needs_human = bool(res.get("needs_human"))
                 reply = (res.get("reply") or "").strip()
-                time.sleep(5)  # Gemini free rate limit
+                time.sleep(5)
 
             if category == "spam":
                 action = "Ignored"
@@ -140,7 +155,7 @@ def main():
                 budget -= 1
         except Exception as e:
             action, reply = f"Error: {type(e).__name__}", str(e)[:150]
-            print("Item fail:", type(e).__name__)
+            log_step(f"Item fail: {type(e).__name__}")
         rows.append(
             [
                 config.now().strftime("%Y-%m-%d %H:%M"),
@@ -156,8 +171,9 @@ def main():
         )
 
     if rows:
-        log.append_rows(rows)
-    print(f"Logged: {len(rows)}")
+        log_step(f"Appending {len(rows)} rows to sheet...")
+        log_ws.append_rows(rows)
+    log_step(f"Logged: {len(rows)}")
 
 
 if __name__ == "__main__":
