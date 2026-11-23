@@ -10,46 +10,21 @@ from google.genai import types
 from .config import GEMINI_MODEL
 
 _client = None
-_discovered_models = None
 
-FALLBACK_MODELS = [
+PREFERRED_GEMINI_MODELS = [
     GEMINI_MODEL,
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 ]
 
 
-def list_available_models():
-    models = []
-    for m in client().models.list():
-        name = getattr(m, "name", "")
-        actions = getattr(m, "supported_actions", None) or []
-        if not actions or "generateContent" in actions:
-            clean = name.replace("models/", "").strip()
-            if clean and all(x not in clean for x in ("embedding", "imagen", "veo", "tts", "audio")):
-                models.append(clean)
-    return models
-
-
 def _candidate_models():
-    global _discovered_models
     out, seen = [], set()
-    for m in FALLBACK_MODELS:
+    for m in PREFERRED_GEMINI_MODELS:
         name = (m or "").strip()
         if name and name not in seen:
             seen.add(name)
             out.append(name)
-
-    if _discovered_models is None:
-        try:
-            _discovered_models = list_available_models()
-        except Exception:
-            _discovered_models = []
-
-    for m in _discovered_models:
-        if m not in seen:
-            seen.add(m)
-            out.append(m)
     return out
 
 
@@ -58,7 +33,7 @@ def client():
     if _client is None:
         _client = genai.Client(
             api_key=os.environ["GEMINI_API_KEY"],
-            http_options=types.HttpOptions(timeout=15000),
+            http_options=types.HttpOptions(timeout=12000),
         )
     return _client
 
@@ -66,7 +41,7 @@ def client():
 def _groq_fallback(prompt, system=None, temperature=0.7, json_mode=False):
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     if not groq_key:
-        raise RuntimeError("Gemini quota exhausted (429) and GROQ_API_KEY is not set.")
+        raise RuntimeError("Gemini failed/quota exhausted and GROQ_API_KEY is not set.")
 
     print("Switching to Groq fallback (llama-3.3-70b-versatile)...", flush=True)
     messages = []
@@ -95,32 +70,44 @@ def _groq_fallback(prompt, system=None, temperature=0.7, json_mode=False):
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def _extract_json(raw_text):
+    text = (raw_text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
 def _generate_with_fallback(prompt, config, system=None, temperature=0.7, json_mode=False):
     last_err = None
-    models = _candidate_models()
-    for idx, model_name in enumerate(models):
-        try:
-            print(f"Trying Gemini model: {model_name}", flush=True)
-            r = client().models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=config,
-            )
-            return r.text or ""
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            print(f"Model {model_name} failed: {type(e).__name__}", flush=True)
-            # Agar 429 ya 404 aaye to fauran agla model try karein
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "404" in err_str:
-                continue
-            if idx < len(models) - 1:
-                time.sleep(1)
+    has_gemini_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
 
-    # Agar saare Gemini models fail/429 hon to Groq fallback chalayein
-    if os.getenv("GROQ_API_KEY"):
+    if has_gemini_key:
+        for model_name in _candidate_models():
+            try:
+                print(f"Trying Gemini model: {model_name}", flush=True)
+                r = client().models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
+                if r.text:
+                    return r.text
+            except Exception as e:
+                last_err = e
+                print(f"Model {model_name} failed: {type(e).__name__}", flush=True)
+                continue
+
+    if os.getenv("GROQ_API_KEY", "").strip():
         return _groq_fallback(prompt, system=system, temperature=temperature, json_mode=json_mode)
-    raise last_err
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("No AI provider succeeded.")
 
 
 def ask_json(prompt, system=None, temperature=0.8):
@@ -132,14 +119,14 @@ def ask_json(prompt, system=None, temperature=0.8):
     raw = _generate_with_fallback(
         prompt, cfg, system=system, temperature=temperature, json_mode=True
     )
-    text = raw.strip()
-    text = re.sub(r"^```(?:json)?|```$", "", text).strip()
-    return json.loads(text)
+    return _extract_json(raw)
 
 
 def research(brand, post):
     """Google Search se trending angles/hashtags (optional; fail ho to khali)."""
     if os.getenv("USE_SEARCH", "1") != "1":
+        return ""
+    if not os.getenv("GEMINI_API_KEY", "").strip():
         return ""
     prompt = (
         f"Business: {brand.get('brand_name')} ({brand.get('industry')}).\n"
