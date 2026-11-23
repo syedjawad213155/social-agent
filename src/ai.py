@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import requests
 
 from google import genai
 from google.genai import types
@@ -13,8 +14,8 @@ _discovered_models = None
 
 FALLBACK_MODELS = [
     GEMINI_MODEL,
+    "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
 ]
 
 
@@ -25,7 +26,7 @@ def list_available_models():
         actions = getattr(m, "supported_actions", None) or []
         if not actions or "generateContent" in actions:
             clean = name.replace("models/", "").strip()
-            if clean and "embedding" not in clean and "imagen" not in clean and "veo" not in clean:
+            if clean and all(x not in clean for x in ("embedding", "imagen", "veo", "tts", "audio")):
                 models.append(clean)
     return models
 
@@ -42,9 +43,7 @@ def _candidate_models():
     if _discovered_models is None:
         try:
             _discovered_models = list_available_models()
-            print("Available Gemini models:", _discovered_models, flush=True)
-        except Exception as e:
-            print("Model list fetch failed:", type(e).__name__, flush=True)
+        except Exception:
             _discovered_models = []
 
     for m in _discovered_models:
@@ -59,27 +58,68 @@ def client():
     if _client is None:
         _client = genai.Client(
             api_key=os.environ["GEMINI_API_KEY"],
-            http_options=types.HttpOptions(timeout=15000),  # 15s hard timeout
+            http_options=types.HttpOptions(timeout=15000),
         )
     return _client
 
 
-def _generate_with_fallback(contents, config):
+def _groq_fallback(prompt, system=None, temperature=0.7, json_mode=False):
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
+        raise RuntimeError("Gemini quota exhausted (429) and GROQ_API_KEY is not set.")
+
+    print("Switching to Groq fallback (llama-3.3-70b-versatile)...", flush=True)
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def _generate_with_fallback(prompt, config, system=None, temperature=0.7, json_mode=False):
     last_err = None
     models = _candidate_models()
     for idx, model_name in enumerate(models):
         try:
-            print(f"Trying model: {model_name}", flush=True)
-            return client().models.generate_content(
+            print(f"Trying Gemini model: {model_name}", flush=True)
+            r = client().models.generate_content(
                 model=model_name,
-                contents=contents,
+                contents=prompt,
                 config=config,
             )
+            return r.text or ""
         except Exception as e:
             last_err = e
+            err_str = str(e)
             print(f"Model {model_name} failed: {type(e).__name__}", flush=True)
+            # Agar 429 ya 404 aaye to fauran agla model try karein
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "404" in err_str:
+                continue
             if idx < len(models) - 1:
                 time.sleep(1)
+
+    # Agar saare Gemini models fail/429 hon to Groq fallback chalayein
+    if os.getenv("GROQ_API_KEY"):
+        return _groq_fallback(prompt, system=system, temperature=temperature, json_mode=json_mode)
     raise last_err
 
 
@@ -89,8 +129,10 @@ def ask_json(prompt, system=None, temperature=0.8):
         temperature=temperature,
         response_mime_type="application/json",
     )
-    r = _generate_with_fallback(prompt, cfg)
-    text = (r.text or "").strip()
+    raw = _generate_with_fallback(
+        prompt, cfg, system=system, temperature=temperature, json_mode=True
+    )
+    text = raw.strip()
     text = re.sub(r"^```(?:json)?|```$", "", text).strip()
     return json.loads(text)
 
@@ -107,9 +149,10 @@ def research(brand, post):
         "(3) one trending angle or hook idea. Keep it short, plain text."
     )
     try:
-        r = _generate_with_fallback(
-            prompt,
-            types.GenerateContentConfig(
+        r = client().models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())]
             ),
         )
@@ -204,7 +247,3 @@ Rules:
 - Never invent prices, dates, discounts or promises. If unsure, say the team will follow up and share contact: {brand.get('contact')}.
 JSON: {{"category": "...", "needs_human": true/false, "reply": "..."}}"""
     return ask_json(prompt, system, temperature=0.4)
-
-
-if __name__ == "__main__":
-    print("Available Gemini models:", list_available_models(), flush=True)
